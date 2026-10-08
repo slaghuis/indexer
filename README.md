@@ -1,6 +1,13 @@
 # Go Indexer for Qdrant
 A production-grade indexer that uses Go's AST to chunk code semantically, embeds via Ollama, and upserts to Qdrant. Idempotent, incremental, and watch-mode capable.
 
+### What this gives you
+ - Semantically chunked Go code in Qdrant with rich payloads.
+ - Idempotent, incremental re-indexing
+ - Watch mode for live-updating during development
+ - Deterministic IDs so any process can reason about point identity.
+Set up a MCP server that queries this collection and exposes search_code to opencode / Claude Code to save a ton of AI tokens.
+
 ## Design Decisions
  | Decision | Choice | Why | 
  | ------------ | ---------------- | ----------------| 
