@@ -15,17 +15,17 @@ A production-grade indexer that uses Go's AST to chunk code semantically, embeds
 
 
 ## Run it
-`
+```
 # Make sure Qdrant and Ollama are running
 docker ps | grep qdrant
 curl -s http://localhost:11434/api/tags | jq .
 
 go run ./cmd/indexer -config config.yaml           # one-shot
 go run ./cmd/indexer -config config.yaml -watch    # daemon mode
-`
+```
 
 Verify in Qdrant
-`
+```
 # Collection info
 curl -s http://localhost:6333/collections/code_chunks | jq .
 
@@ -38,7 +38,7 @@ curl -s -X POST http://localhost:6333/collections/code_chunks/points/search \
   -H 'Content-Type: application/json' \
   -d "{\"vector\": $QUERY_VEC, \"limit\": 5, \"with_payload\": true}" \
   | jq '.result[] | {score, symbol: .payload.symbol, path: .payload.path}'
-`
+```
 
 ## Operational Notes
  - **First run** on a ~100k LOC repo: ~2–4 minutes on an M4 with concurrency: 4.
