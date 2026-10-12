@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/qdrant/go-client/qdrant"
 	"github.com/slaghuis/indexer/internal/chunker"
@@ -14,18 +15,29 @@ type Qdrant struct {
 	dim        uint64
 }
 
-func New(host string, port int, collection string, dim uint64) (*Qdrant, error) {
+func New(host string, port int, collection string, dim uint64, apiKey string, useTLS bool) (*Qdrant, error) {
 	c, err := qdrant.NewClient(&qdrant.Config{
-		Host: host, Port: port,
+		Host:   host,
+		Port:   port,
+		APIKey: apiKey,
+		UseTLS: useTLS,
 	})
 	if err != nil {
 		return nil, err
 	}
 	q := &Qdrant{client: c, collection: collection, dim: dim}
 	if err := q.ensureCollection(context.Background()); err != nil {
+		_ = c.Close()
 		return nil, err
 	}
 	return q, nil
+}
+
+func (q *Qdrant) Close() error {
+	if q.client == nil {
+		return nil
+	}
+	return q.client.Close()
 }
 
 func (q *Qdrant) ensureCollection(ctx context.Context) error {
@@ -33,16 +45,43 @@ func (q *Qdrant) ensureCollection(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if exists {
-		return nil
+	if !exists {
+		if err := q.client.CreateCollection(ctx, &qdrant.CreateCollection{
+			CollectionName: q.collection,
+			VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
+				Size:     q.dim,
+				Distance: qdrant.Distance_Cosine,
+			}),
+		}); err != nil {
+			return err
+		}
 	}
-	return q.client.CreateCollection(ctx, &qdrant.CreateCollection{
-		CollectionName: q.collection,
-		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
-			Size:     q.dim,
-			Distance: qdrant.Distance_Cosine,
-		}),
-	})
+	return q.ensureIndexes(ctx)
+}
+
+func (q *Qdrant) ensureIndexes(ctx context.Context) error {
+	for _, field := range []string{"repo", "path", "symbol", "kind"} {
+		ft := qdrant.FieldType_FieldTypeKeyword
+		wait := true
+		_, err := q.client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
+			CollectionName: q.collection,
+			FieldName:      field,
+			FieldType:      &ft,
+			Wait:           &wait,
+		})
+		if err != nil && !alreadyExists(err) {
+			return fmt.Errorf("index %s: %w", field, err)
+		}
+	}
+	return nil
+}
+
+func alreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "already exists") || strings.Contains(s, "already exist")
 }
 
 func (q *Qdrant) Upsert(ctx context.Context, c chunker.Chunk, vec []float32) error {
@@ -59,6 +98,7 @@ func (q *Qdrant) Upsert(ctx context.Context, c chunker.Chunk, vec []float32) err
 		"end_line":   c.EndLine,
 		"hash":       c.Hash,
 		"lang":       "go",
+		"imports":    strings.Join(c.Imports, ","),
 	})
 
 	_, err := q.client.Upsert(ctx, &qdrant.UpsertPoints{
@@ -81,8 +121,11 @@ func (q *Qdrant) ExistingHash(ctx context.Context, id string) (string, error) {
 		Ids:            []*qdrant.PointId{qdrant.NewIDUUID(id)},
 		WithPayload:    qdrant.NewWithPayload(true),
 	})
-	if err != nil || len(resp) == 0 {
+	if err != nil {
 		return "", err
+	}
+	if len(resp) == 0 {
+		return "", nil
 	}
 	if v, ok := resp[0].Payload["hash"]; ok {
 		return v.GetStringValue(), nil
@@ -106,7 +149,6 @@ func (q *Qdrant) DeleteByPath(ctx context.Context, repo, path string) error {
 
 // DeleteStale removes points for a file whose StableIDs are not in `keep`.
 func (q *Qdrant) DeleteStale(ctx context.Context, repo, path string, keep map[string]bool) error {
-	// Scroll all points for this file, filter in-memory, delete missing.
 	var offset *qdrant.PointId
 	var toDelete []*qdrant.PointId
 	for {

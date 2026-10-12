@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,7 +19,7 @@ type Ollama struct {
 
 func NewOllama(baseURL, model string) *Ollama {
 	return &Ollama{
-		BaseURL: baseURL,
+		BaseURL: strings.TrimRight(baseURL, "/"),
 		Model:   model,
 		HTTP:    &http.Client{Timeout: 60 * time.Second},
 	}
@@ -33,8 +35,11 @@ type embedResp struct {
 }
 
 func (o *Ollama) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, _ := json.Marshal(embedReq{Model: o.Model, Input: text})
-	req, err := http.NewRequestWithContext(ctx, "POST",
+	body, err := json.Marshal(embedReq{Model: o.Model, Input: text})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		o.BaseURL+"/api/embed", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -46,8 +51,9 @@ func (o *Ollama) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("ollama embed status %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("ollama embed status %d: %s", resp.StatusCode, bytes.TrimSpace(msg))
 	}
 
 	var out embedResp
