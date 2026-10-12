@@ -10,6 +10,8 @@ qdrant:
   port: 6334            # gRPC port
   collection: code_chunks
   dim: 768              # nomic-embed-text
+  # api_key: ""         # or set QDRANT_API_KEY
+  # tls: false
 
 ollama:
   base_url: http://localhost:11434

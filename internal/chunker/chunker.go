@@ -12,22 +12,21 @@ import (
 )
 
 type Chunk struct {
-	Repo       string
-	Path       string      // relative to repo root
-	Package    string
-	Symbol     string      // e.g. "UserService.CreateUser"
-	Kind       string      // "func", "method", "type", "const", "var"
-	Signature  string
-	Doc        string
-	Body       string
-	StartLine  int
-	EndLine    int
-	Imports    []string
-	Hash       string      // sha256 of Body
+	Repo      string
+	Path      string // relative to repo root
+	Package   string
+	Symbol    string // e.g. "UserService.CreateUser"
+	Kind      string // "func", "method", "type"
+	Signature string
+	Doc       string
+	Body      string
+	StartLine int
+	EndLine   int
+	Imports   []string
+	Hash      string // sha256 of Body
 }
 
-// Text returns the string that will be embedded. 
-// Enrichment matters more than you'd think.
+// Text returns the string that will be embedded.
 func (c *Chunk) Text() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "package %s\n", c.Package)
@@ -46,7 +45,6 @@ func (c *Chunk) Text() string {
 // StableID produces a deterministic UUID-like string for Qdrant.
 func (c *Chunk) StableID() string {
 	h := sha256.Sum256([]byte(c.Repo + "::" + c.Path + "::" + c.Symbol))
-	// Qdrant accepts UUID or uint64. Use UUID formatted hex.
 	hx := hex.EncodeToString(h[:16])
 	return fmt.Sprintf("%s-%s-%s-%s-%s",
 		hx[0:8], hx[8:12], hx[12:16], hx[16:20], hx[20:32])
@@ -103,7 +101,6 @@ func funcChunk(repo, path, pkg string, imports []string,
 	}
 
 	sig := extractSignature(body)
-
 	h := sha256.Sum256([]byte(body))
 
 	return Chunk{
@@ -163,7 +160,9 @@ func exprString(e ast.Expr) string {
 		return x.Name
 	case *ast.StarExpr:
 		return "*" + exprString(x.X)
-	case *ast.IndexExpr: // generic receivers
+	case *ast.IndexExpr:
+		return exprString(x.X)
+	case *ast.IndexListExpr:
 		return exprString(x.X)
 	}
 	return "unknown"

@@ -32,15 +32,15 @@ type Pipeline struct {
 }
 
 func New(cfg Config, emb *embedder.Ollama, st *store.Qdrant, log *slog.Logger) *Pipeline {
-	if cfg.Concurrency == 0 {
+	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 4
 	}
 	return &Pipeline{cfg: cfg, emb: emb, st: st, log: log}
 }
 
 type stats struct {
-	mu                            sync.Mutex
-	files, chunks, skipped, errs  int
+	mu                           sync.Mutex
+	files, chunks, skipped, errs int
 }
 
 func (s *stats) add(f, c, sk, e int) {
@@ -60,20 +60,23 @@ func (p *Pipeline) IndexAll(ctx context.Context) error {
 	paths := make(chan string, 128)
 	g, gctx := errgroup.WithContext(ctx)
 
-	// walker
 	g.Go(func() error {
 		defer close(paths)
 		return filepath.WalkDir(p.cfg.Root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
+				if path == p.cfg.Root {
+					return err
+				}
+				p.log.Warn("walk skipped", "path", path, "err", err)
 				return nil
 			}
 			if d.IsDir() {
-				if p.shouldSkipDir(d.Name()) {
+				if SkipDir(d.Name(), p.cfg.Ignore) {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			if !IsGoSource(path) {
 				return nil
 			}
 			select {
@@ -85,7 +88,6 @@ func (p *Pipeline) IndexAll(ctx context.Context) error {
 		})
 	})
 
-	// workers
 	for i := 0; i < p.cfg.Concurrency; i++ {
 		g.Go(func() error {
 			for path := range paths {
@@ -126,7 +128,10 @@ func (p *Pipeline) indexFile(ctx context.Context, absPath string, st *stats) err
 		id := c.StableID()
 		keep[id] = true
 
-		existing, _ := p.st.ExistingHash(ctx, id)
+		existing, err := p.st.ExistingHash(ctx, id)
+		if err != nil {
+			return fmt.Errorf("lookup %s: %w", c.Symbol, err)
+		}
 		if existing == c.Hash {
 			skipCount++
 			continue
@@ -165,15 +170,16 @@ func (p *Pipeline) RemoveFile(ctx context.Context, absPath string) error {
 	return p.st.DeleteByPath(ctx, p.cfg.Repo, rel)
 }
 
-func (p *Pipeline) shouldSkipDir(name string) bool {
-	skip := map[string]bool{
-		".git": true, "vendor": true, "node_modules": true,
-		".idea": true, ".vscode": true, "dist": true, "bin": true,
-	}
-	if skip[name] {
+func IsGoSource(path string) bool {
+	return strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go")
+}
+
+func SkipDir(name string, ignore []string) bool {
+	switch name {
+	case ".git", "vendor", "node_modules", ".idea", ".vscode", "dist", "bin":
 		return true
 	}
-	for _, pat := range p.cfg.Ignore {
+	for _, pat := range ignore {
 		if pat == name {
 			return true
 		}
